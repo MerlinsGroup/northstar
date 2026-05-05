@@ -3,8 +3,16 @@ import {
   Star, Users, QrCode, Sparkles, Bell, Settings as SettingsIcon, BarChart3,
   Plus, Send, Download, Copy, ChevronRight, ArrowRight, Check, AlertCircle,
   Mail, Building2, TrendingUp, Trash2, MessageSquare, Menu, X, ArrowUpRight,
-  CheckCircle2, Clock, Zap, Shield, FileText, ChevronDown
+  CheckCircle2, Clock, Zap, Shield, FileText, ChevronDown, LogOut
 } from 'lucide-react';
+import {
+  onAuthStateChanged,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signOut,
+} from 'firebase/auth';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { auth, db, getCurrentUid } from './src/firebase';
 
 /* -------------------------------------------------------------------------- */
 /*  Fonts + global styles                                                     */
@@ -127,14 +135,24 @@ const SAMPLE_REVIEWS = [
 /* -------------------------------------------------------------------------- */
 
 async function loadKey(key, fallback) {
+  const uid = getCurrentUid();
+  if (!uid) return fallback;
   try {
-    const r = await window.storage.get(key);
-    if (r && r.value) return JSON.parse(r.value);
-  } catch (e) { /* key not found is fine */ }
+    const snap = await getDoc(doc(db, 'users', uid, 'data', key));
+    if (snap.exists()) {
+      const d = snap.data();
+      return d.items !== undefined ? d.items : d;
+    }
+  } catch (e) { console.error('loadKey', key, e); }
   return fallback;
 }
 async function saveKey(key, val) {
-  try { await window.storage.set(key, JSON.stringify(val)); } catch (e) {}
+  const uid = getCurrentUid();
+  if (!uid) return;
+  try {
+    const payload = Array.isArray(val) ? { items: val } : val;
+    await setDoc(doc(db, 'users', uid, 'data', key), payload);
+  } catch (e) { console.error('saveKey', key, e); }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -669,8 +687,8 @@ function AppShell({ onExit }) {
             <div className="text-xs text-paper/60 mt-1">£99/month</div>
           </div>
           <button onClick={onExit} className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm text-paper/70 hover:bg-paper/10 hover:text-paper transition">
-            <ArrowRight size={16} className="rotate-180" />
-            Back to landing
+            <LogOut size={16} />
+            Sign out
           </button>
         </div>
       </aside>
@@ -1443,15 +1461,156 @@ function SettingsTab({ business, setBusiness, showToast }) {
 /*  ROOT                                                                      */
 /* -------------------------------------------------------------------------- */
 
+/* -------------------------------------------------------------------------- */
+/*  Auth screen                                                               */
+/* -------------------------------------------------------------------------- */
+
+function Auth({ onBack }) {
+  const [mode, setMode] = useState('signin'); // 'signin' | 'signup'
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setErr(''); setBusy(true);
+    try {
+      if (mode === 'signup') {
+        await createUserWithEmailAndPassword(auth, email.trim(), password);
+      } else {
+        await signInWithEmailAndPassword(auth, email.trim(), password);
+      }
+    } catch (e) {
+      const code = e?.code || '';
+      const msg =
+        code === 'auth/invalid-credential' ? 'Email or password is incorrect.' :
+        code === 'auth/email-already-in-use' ? 'An account with that email already exists.' :
+        code === 'auth/weak-password' ? 'Password must be at least 6 characters.' :
+        code === 'auth/invalid-email' ? 'That email address is not valid.' :
+        code === 'auth/operation-not-allowed' ? 'Email/Password sign-in is not enabled in Firebase.' :
+        e?.message || 'Something went wrong. Try again.';
+      setErr(msg);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="bg-paper text-ink min-h-screen font-body grain flex items-center justify-center px-4">
+      <GlobalStyles />
+      <div className="w-full max-w-md">
+        <button onClick={onBack} className="text-sm text-mute hover:text-ink mb-6 flex items-center gap-1">
+          <ArrowRight size={14} className="rotate-180" /> Back
+        </button>
+        <div className="bg-white border border-ink/10 rounded-2xl p-8 shadow-sm">
+          <div className="flex items-center gap-2 mb-6">
+            <div className="w-8 h-8 bg-ink rounded-full flex items-center justify-center">
+              <Star size={16} className="text-honey fill-honey" />
+            </div>
+            <span className="font-display text-2xl font-medium">Northstar</span>
+          </div>
+          <h1 className="font-display text-3xl font-medium mb-1">
+            {mode === 'signup' ? 'Create your account' : 'Welcome back'}
+          </h1>
+          <p className="text-sm text-mute mb-6">
+            {mode === 'signup'
+              ? 'Your customers, reviews and settings stay private to your account.'
+              : 'Sign in to access your dashboard.'}
+          </p>
+
+          <form onSubmit={submit} className="space-y-3">
+            <div>
+              <label className="text-xs uppercase tracking-wider text-mute">Email</label>
+              <input
+                type="email" required value={email} onChange={(e) => setEmail(e.target.value)}
+                className="w-full mt-1 px-4 py-3 rounded-xl border border-ink/15 bg-paper focus:outline-none focus:border-ink"
+                placeholder="you@business.com"
+              />
+            </div>
+            <div>
+              <label className="text-xs uppercase tracking-wider text-mute">Password</label>
+              <input
+                type="password" required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)}
+                className="w-full mt-1 px-4 py-3 rounded-xl border border-ink/15 bg-paper focus:outline-none focus:border-ink"
+                placeholder={mode === 'signup' ? 'At least 6 characters' : '••••••••'}
+              />
+            </div>
+
+            {err && (
+              <div className="text-sm text-coral bg-coral/10 border border-coral/30 rounded-lg px-3 py-2 flex items-start gap-2">
+                <AlertCircle size={16} className="mt-0.5 shrink-0" /><span>{err}</span>
+              </div>
+            )}
+
+            <button
+              type="submit" disabled={busy}
+              className="w-full bg-ink text-paper rounded-xl py-3 font-medium hover:bg-ink-2 transition disabled:opacity-60 flex items-center justify-center gap-2"
+            >
+              {busy ? 'Please wait…' : (mode === 'signup' ? 'Create account' : 'Sign in')}
+              {!busy && <ArrowRight size={16} />}
+            </button>
+          </form>
+
+          <div className="mt-6 text-sm text-mute text-center">
+            {mode === 'signup' ? (
+              <>Already have an account?{' '}
+                <button onClick={() => { setMode('signin'); setErr(''); }} className="text-ink underline">Sign in</button>
+              </>
+            ) : (
+              <>New to Northstar?{' '}
+                <button onClick={() => { setMode('signup'); setErr(''); }} className="text-ink underline">Create an account</button>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  ROOT                                                                      */
+/* -------------------------------------------------------------------------- */
+
 export default function App() {
-  const [view, setView] = useState('landing');
+  const [view, setView] = useState('landing'); // 'landing' | 'auth' | 'app'
+  const [user, setUser] = useState(null);
+  const [authReady, setAuthReady] = useState(false);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setAuthReady(true);
+      if (u) setView('app');
+    });
+    return unsub;
+  }, []);
+
+  if (!authReady) {
+    return (
+      <div className="bg-paper min-h-screen flex items-center justify-center font-body text-mute text-sm">
+        <GlobalStyles />
+        Loading…
+      </div>
+    );
+  }
+
   return (
     <>
       <GlobalStyles />
-      {view === 'landing'
-        ? <Landing onEnter={() => setView('app')} />
-        : <AppShell onExit={() => setView('landing')} />
-      }
+      {view === 'landing' && (
+        <Landing onEnter={() => setView(user ? 'app' : 'auth')} />
+      )}
+      {view === 'auth' && !user && (
+        <Auth onBack={() => setView('landing')} />
+      )}
+      {view === 'app' && user && (
+        <AppShell
+          key={user.uid}
+          onExit={async () => { await signOut(auth); setView('landing'); }}
+        />
+      )}
     </>
   );
 }
